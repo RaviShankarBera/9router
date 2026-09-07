@@ -404,7 +404,20 @@ async function wrapQoderSSE(response, model) {
       return;
     }
     // Strip embedded newlines so the SSE frame stays a single event.
-    const sanitized = inner.replace(/\r?\n/g, "");
+    let sanitized = inner.replace(/\r?\n/g, "");
+    try {
+      const parsed = JSON.parse(sanitized);
+      if (Array.isArray(parsed?.choices)) {
+        let changed = false;
+        for (const choice of parsed.choices) {
+          if (choice?.delta && "role" in choice.delta && choice.delta.role !== "assistant") {
+            delete choice.delta.role;
+            changed = true;
+          }
+        }
+        if (changed) sanitized = JSON.stringify(parsed);
+      }
+    } catch {}
     controller.enqueue(encoder.encode(`data: ${sanitized}\n\n`));
   };
 
