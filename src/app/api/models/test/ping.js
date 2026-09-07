@@ -1,6 +1,8 @@
 import { getApiKeys } from "@/lib/localDb";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { handleChat } from "@/sse/handlers/chat.js";
+import { initTranslators } from "open-sse/translator/index.js";
 
 const CLI_TOKEN_SALT = "9r-cli-auth";
 
@@ -37,7 +39,7 @@ function createSilentWavFile() {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function getInternalHeaders() {
+export async function getInternalHeaders() {
   let apiKey = null;
   try {
     const keys = await getApiKeys();
@@ -48,6 +50,27 @@ async function getInternalHeaders() {
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   headers["x-9r-cli-token"] = await getConsistentMachineId(CLI_TOKEN_SALT);
   return headers;
+}
+
+export async function pingModelDirect(model) {
+  await initTranslators();
+  const response = await handleChat(new Request("http://internal/api/v1/chat/completions", {
+    method: "POST",
+    headers: await getInternalHeaders(),
+    body: JSON.stringify({ model, max_tokens: 1024, stream: false, messages: [{ role: "user", content: "hi" }] }),
+  }));
+  const rawText = await response.text().catch(() => "");
+  let parsed = null;
+  try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
+  if (!response.ok) {
+    const detail = parsed?.error?.message || parsed?.error || rawText;
+    return { ok: false, status: response.status, error: `HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 240)}` : ""}` };
+  }
+  if (parsed?.error) return { ok: false, status: response.status, error: String(parsed.error.message || parsed.error).slice(0, 240) };
+  if (!Array.isArray(parsed?.choices) || parsed.choices.length === 0) {
+    return { ok: false, status: response.status, error: "Provider returned no completion choices for this model" };
+  }
+  return { ok: true, status: response.status, error: null };
 }
 
 export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`) {
