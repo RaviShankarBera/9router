@@ -93,7 +93,7 @@ export async function POST(request) {
       return NextResponse.json({ success: true, mustChangePassword: false }, { headers: NO_STORE_HEADERS });
     }
 
-    const { remainingBeforeLock } = recordFail(ip);
+    const { remainingBeforeLock = 5 } = recordFail(ip) || {};
     const postLock = checkLock(ip);
     if (postLock.locked) {
       return NextResponse.json(
