@@ -1,3 +1,29 @@
+# v0.5.71-Custom (2026-09-10)
+
+## Custom Features & Enhancements
+- **Model Editor**: Edit per-model overrides (rename, target model, context window, system prompt) and manage custom provider prefixes from a dedicated Model Editor page under Feature+.
+- **MoonshotAI Provider**: Added MoonshotAI (Kimi) compatible provider option alongside OpenAI/Anthropic compatible providers.
+- **Extra Combo Strategies**: New combo routing strategies beyond Fallback / Round Robin / Fusion.
+- **Changelog View**: Combined changelog modal — custom contributions shown in a highlighted "Contributed by Seren" section above the official Decolua release notes.
+- **UI Cleanup**: Refined dashboard layout, tidied console log view, and removed the Live Feed page and related controls for a cleaner sidebar.
+- **Backup Fix**: Fixed API key settings and usage statistics being reset on backup import (column/placeholder mismatch).
+
+## Fixes
+- **API Key Creation Bug**: Fixed `createApiKey` INSERT placeholder mismatch (16 columns vs 15 `?`) that made creating any API key silently fail.
+- **API Key Expiry**: Expiry date set during creation is now persisted (was silently dropped).
+- **Unique Key Names**: API key names are enforced unique — server rejects duplicates and the client shows a clear message; no overwriting.
+- **Duplicate API Key**: Added a Duplicate button per key that copies all settings into a new key with an auto-suggested unique name (`X (copy)`, `X (copy 2)`, …); a fresh key value is generated.
+
+# v0.5.70-Custom (2026-09-07)
+
+## Custom Features & Enhancements
+- **API Key Quota & Limits**: Add token limit per API Key with real-time usage tracking and HTTP 429 (`API key token limit exceeded`) response upon quota exhaustion.
+- **Dynamic Auto Reset Interval**: Support periodic usage reset intervals (`5h`, `7d`, `14d`, `30d`, and custom intervals such as `10h` or `3d`). Column dynamically appears only when `tokenLimit > 0`.
+- **Model Access Control**: Restrict API Keys to specific allowed models (`allowedModels`) with wildcard support (`claude-*`, `gpt-*`) or exact matches. Returns HTTP 403 when calling unauthorized models.
+- **Interactive Model Selector**: Integrated `ModelSelectModal` directly into Create & Edit API Key forms, allowing users to pick allowed models visually (same UI as Combo creation) without manual typing.
+- **Key Editing & Management**: Support editing API Key names, token limits, reset intervals, and allowed models anytime. Added manual usage reset button (`restart_alt`) to set used tokens back to 0.
+- **UI & Theme Sync**: Enforced permanent Dark Mode theme across the app, removing theme toggles and display language switcher controls for a clean UI. Updated custom select dropdown styling to match app theme.
+
 # v0.5.69 (2026-09-05)
 
 ## Features

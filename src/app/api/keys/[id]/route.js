@@ -30,6 +30,17 @@ export async function PUT(request, { params }) {
 
     const updateData = {};
     if (isActive !== undefined) updateData.isActive = isActive;
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.tokenLimit !== undefined) updateData.tokenLimit = Number(body.tokenLimit);
+    if (body.resetInterval !== undefined) updateData.resetInterval = body.resetInterval;
+    if (body.usedTokens !== undefined) updateData.usedTokens = Number(body.usedTokens);
+    if (body.lastResetAt !== undefined) updateData.lastResetAt = body.lastResetAt;
+    if (body.allowedModels !== undefined) updateData.allowedModels = body.allowedModels;
+    if (body.rpmLimit !== undefined) updateData.rpmLimit = Number(body.rpmLimit);
+    if (body.tpmLimit !== undefined) updateData.tpmLimit = Number(body.tpmLimit);
+    if (body.ipWhitelist !== undefined) updateData.ipWhitelist = body.ipWhitelist;
+ if (body.expiresAt !== undefined) updateData.expiresAt = body.expiresAt || null;
+ if (body.systemPrompt !== undefined) updateData.systemPrompt = body.systemPrompt;
 
     const updated = await updateApiKey(id, updateData);
 

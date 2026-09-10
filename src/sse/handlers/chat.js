@@ -9,6 +9,7 @@ import {
 } from "../services/auth.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
+import { getClientIp } from "@/lib/auth/loginLimiter";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
@@ -24,6 +25,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
+
 
 /**
  * Handle chat completion request
@@ -51,8 +53,9 @@ export async function handleChat(request, clientRawRequest = null) {
   // Claude Code marks a 1M-context request as `<model>[1m]`; the marker matches
   // no combo, alias or provider/model pair, so it must not reach resolution.
   // The capability travels in the anthropic-beta header, forwarded as-is.
-  const { model: modelStr, contextMarker } = stripModelContextMarker(body.model);
+  let { model: modelStr, contextMarker } = stripModelContextMarker(body.model);
   if (contextMarker) body.model = modelStr;
+
 
   // Request summary is emitted as the unified "▶" line in chatCore (has fmt/thinking/account)
 
@@ -66,23 +69,49 @@ export async function handleChat(request, clientRawRequest = null) {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-    }
-  }
-
   if (!modelStr) {
     log.warn("CHAT", "Missing model");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  }
+
+  // Enforce API key if provided or if required by settings
+  const settings = await getSettings();
+  if (settings.requireApiKey && !apiKey) {
+    log.warn("AUTH", "Missing API key (requireApiKey=true)");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
+  }
+
+  if (apiKey) {
+    const clientIp = getClientIp(request);
+    const valid = await isValidApiKey(apiKey, modelStr, clientIp);
+    if (valid === "QUOTA_EXCEEDED") {
+      log.warn("AUTH", "API key quota exceeded");
+      return errorResponse(HTTP_STATUS.TOO_MANY_REQUESTS, "API key token limit exceeded");
+    }
+    if (valid === "RPM_EXCEEDED") {
+      log.warn("AUTH", "API key RPM limit exceeded");
+      return errorResponse(HTTP_STATUS.TOO_MANY_REQUESTS, "API key rate limit exceeded (RPM limit reached)");
+    }
+    if (valid === "TPM_EXCEEDED") {
+      log.warn("AUTH", "API key TPM limit exceeded");
+      return errorResponse(HTTP_STATUS.TOO_MANY_REQUESTS, "API key rate limit exceeded (TPM limit reached)");
+    }
+    if (valid === "IP_NOT_ALLOWED") {
+      log.warn("AUTH", `IP "${clientIp}" not in whitelist for this API key`);
+      return errorResponse(HTTP_STATUS.FORBIDDEN, `Client IP (${clientIp}) is not authorized to use this API key`);
+    }
+    if (valid === "MODEL_NOT_ALLOWED") {
+      log.warn("AUTH", `Model "${modelStr}" not allowed for this API key`);
+      return errorResponse(HTTP_STATUS.FORBIDDEN, `Model "${modelStr}" is not allowed for this API key`);
+    }
+ if (valid === "KEY_EXPIRED") {
+ log.warn("AUTH", "API key expired");
+ return errorResponse(HTTP_STATUS.FORBIDDEN, "API key has expired");
+ }
+    if (!valid && settings.requireApiKey) {
+      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
+      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+    }
   }
 
   // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
@@ -219,6 +248,28 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   }
 
   const { provider, model } = modelInfo;
+ let effectiveModel = model;
+
+ // Apply per-model overrides (Model Editor)
+ try {
+   const { getModelOverride } = await import("@/lib/db/repos/modelEditorRepo.js");
+   const overrideKey = provider ? `${provider}|${model}` : null;
+   const override = overrideKey ? await getModelOverride(overrideKey) : null;
+   if (override) {
+     if (override.targetModel) {
+       effectiveModel = override.targetModel;
+     }
+     if (override.systemPrompt) {
+       if (Array.isArray(body.messages)) {
+         body.messages.unshift({ role: "system", content: override.systemPrompt });
+       } else if (typeof body.system === "string") {
+         body.system = override.systemPrompt + "\n\n" + body.system;
+       } else {
+         body.system = override.systemPrompt;
+       }
+     }
+   }
+ } catch { /* fail open */ }
 
   // Routing shown in the unified "▶" line (client model → provider/model)
 
@@ -266,8 +317,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
     const result = await handleChatCore({
-      body: { ...body, model: `${provider}/${model}` },
-      modelInfo: { provider, model },
+      body: { ...body, model: `${provider}/${effectiveModel}` },
+      modelInfo: { provider, model: effectiveModel },
       credentials: refreshedCredentials,
       log,
       clientRawRequest,
@@ -276,6 +327,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       apiKey,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
+      contextPruningEnabled: !!chatSettings.contextPruningEnabled,
+      maxMessagesLimit: chatSettings.maxMessagesLimit || 20,
+      semanticCacheEnabled: !!chatSettings.semanticCacheEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
       headroomUrl: chatSettings.headroomUrl || DEFAULT_HEADROOM_URL,
       headroomCompressUserMessages: !!chatSettings.headroomCompressUserMessages,
