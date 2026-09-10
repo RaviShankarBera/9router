@@ -80,6 +80,16 @@ export function claudeToOpenAIRequest(model, body, stream) {
     result.tool_choice = convertToolChoice(body.tool_choice);
   }
 
+  if (body.reasoning_effort !== undefined) {
+    result.reasoning_effort = body.reasoning_effort;
+  } else if (body.reasoning?.effort !== undefined) {
+    result.reasoning_effort = body.reasoning.effort;
+  }
+
+  if (body.reasoning !== undefined) {
+    result.reasoning = body.reasoning;
+  }
+
   return result;
 }
 
@@ -119,8 +129,32 @@ function fixMissingToolResponsesOpenAI(messages) {
   }
 }
 
+// Wrap mid-conversation system text so it ends as a user turn (avoids Anthropic prefill 400).
+// Uses <instructions> tags that Claude models treat as authoritative directives.
+function systemReminderText(content) {
+  const parts = Array.isArray(content)
+    ? content.filter(c => c?.type === CLAUDE_BLOCK.TEXT).map(c => c.text || "")
+    : [typeof content === "string" ? content : ""];
+  const text = parts.filter(Boolean).join("\n");
+  if (!text.trim()) return "";
+  return `<instructions>\n${text}\n</instructions>`;
+}
+
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg) {
+  // Some clients send content as a single block object; normalize to the
+  // one-element array every branch below (the system-reminder fold included)
+  // expects. Must run BEFORE the role branch: systemReminderText only reads
+  // arrays and strings, so a bare-object system turn was dropped outright.
+  if (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
+    msg.content = [msg.content];
+  }
+  // Mid-conversation system message -> user (per Anthropic placement rules)
+  if (msg.role === ROLE.SYSTEM) {
+    const text = systemReminderText(msg.content);
+    return text ? { role: ROLE.USER, content: text } : null;
+  }
+
   const role = msg.role === ROLE.USER || msg.role === ROLE.TOOL ? ROLE.USER : ROLE.ASSISTANT;
   
   // Simple string content
